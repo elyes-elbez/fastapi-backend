@@ -13,77 +13,72 @@ import requests
 load_dotenv()
 OPENROUTER_API_KEY = os.getenv("HF_API_KEY")
 
-# === Validate API Key Load ===
-if not OPENROUTER_API_KEY:
-    raise ValueError("HF_API_KEY not found in environment variables")
+print("HF_API_KEY =", OPENROUTER_API_KEY)
 
-# === OpenRouter Configuration ===
+
+# === OpenRouter Config ===
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 openrouter_headers = {
     "Authorization": f"Bearer {OPENROUTER_API_KEY}",
     "Content-Type": "application/json"
 }
 
-# === Load Pretrained Classification Model ===
-def load_model(model_path: str = "skin_injury_model.pth"):
+# === Load Classification Model ===
+def load_model(model_path="skin_injury_model.pth"):
     model = models.efficientnet_b0(pretrained=False)
     num_features = model.classifier[1].in_features
     model.classifier = torch.nn.Sequential(
         torch.nn.Dropout(0.3),
         torch.nn.Linear(num_features, 5)
     )
-    model.load_state_dict(torch.load(model_path, map_location="cpu"))
+    model.load_state_dict(torch.load(model_path, map_location=torch.device("cpu")))
     model.eval()
     return model
 
-# === Image Preprocessing Function ===
-def preprocess_image(file: bytes) -> tuple[torch.Tensor, Image.Image]:
+# === Image Preprocessing ===
+def preprocess_image(file) -> torch.Tensor:
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
     image = Image.open(io.BytesIO(file)).convert("RGB")
-    return transform(image).unsqueeze(0), image
+    image_tensor = transform(image).unsqueeze(0)
+    return image_tensor, image
 
 # === Class Names ===
 class_names = ['ingrown nails', 'abrasion', 'bruises', 'burn', 'cut']
 
-# === Initialize FastAPI App ===
+# === FastAPI App Initialization ===
 app = FastAPI()
 
-# === CORS Configuration ===
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with your frontend domain
+    allow_origins=["*"],  # Change to your frontend URL in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# === Load Model on Startup ===
 model = load_model()
 
-# === Prediction Endpoint ===
+# === Predict Endpoint ===
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
-    try:
-        contents = await file.read()
-        image_tensor, _ = preprocess_image(contents)
+    contents = await file.read()
+    image_tensor, _ = preprocess_image(contents)
 
-        with torch.no_grad():
-            outputs = model(image_tensor)
-            _, predicted = torch.max(outputs, 1)
-            predicted_class = class_names[predicted.item()]
+    with torch.no_grad():
+        outputs = model(image_tensor)
+        _, predicted = torch.max(outputs, 1)
+        predicted_class = class_names[predicted.item()]
 
-        return {"predicted_class": predicted_class}
-    except Exception as e:
-        return {"error": "Prediction failed", "details": str(e)}
+    return {"predicted_class": predicted_class}
 
-# === Chatbot (AI Recommendation) Endpoint ===
+# === Chatbot Endpoint ===
 @app.post("/chat")
 async def chat(
-    prompt: str = Body(""),
+    prompt: str = Body(""),  # can be empty or used if needed
     name: str = Body(...),
     age: int = Body(...),
     diagnosis: str = Body(...),
@@ -117,10 +112,10 @@ Allergies: {allergies}
         if response.status_code != 200 or "choices" not in data:
             return {"error": "API Error", "details": data}
 
-        return {"response": data["choices"][0]["message"]["content"].strip()}
+        return {"response": data["choices"][0]["message"]["content"]}
 
     except Exception as e:
-        return {"error": "Chatbot Error", "details": str(e)}
+        return {"error": "Internal Server Error", "details": str(e)}
 
 # === Root Test Endpoint ===
 @app.get("/")
