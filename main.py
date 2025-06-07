@@ -13,9 +13,11 @@ import os
 # === Chatbot Config ===
 HF_API_KEY = os.getenv("HF_API_KEY")
 HF_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1"
-
+print("Token:", os.getenv("HF_API_KEY"))
 headers = {
-    "Authorization": f"Bearer {HF_API_KEY}"
+    "Authorization": f"Bearer {HF_API_KEY}",
+
+    "Content-Type":"application/json"
 }
 
 # === Load Classification Model ===
@@ -102,3 +104,4 @@ async def chat(request: PromptRequest):
 @app.get("/")
 async def root():
     return {"message": "API is running!"}
+
