@@ -99,3 +99,6 @@ async def chat(request: PromptRequest):
         text = text.replace(request.prompt, "").strip()
 
     return {"response": text}
+@app.get("/")
+async def root():
+    return {"message": "API is running!"}
