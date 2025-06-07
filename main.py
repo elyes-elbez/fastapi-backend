@@ -1,23 +1,26 @@
-# main.py
-
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from PIL import Image
-import requests
 import io
 import torch
 from torchvision import models, transforms
+from dotenv import load_dotenv
 import os
+import requests
 
-# === Chatbot Config ===
-HF_API_KEY = os.getenv("HF_API_KEY")
-HF_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1"
-print("Token:", os.getenv("HF_API_KEY"))
-headers = {
-    "Authorization": f"Bearer {HF_API_KEY}",
+# === Load Environment Variables ===
+load_dotenv()
+OPENROUTER_API_KEY = os.getenv("HF_API_KEY")
 
-    "Content-Type":"application/json"
+print("HF_API_KEY =", OPENROUTER_API_KEY)
+
+
+# === OpenRouter Config ===
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+openrouter_headers = {
+    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+    "Content-Type": "application/json"
 }
 
 # === Load Classification Model ===
@@ -46,12 +49,12 @@ def preprocess_image(file) -> torch.Tensor:
 # === Class Names ===
 class_names = ['ingrown nails', 'abrasion', 'bruises', 'burn', 'cut']
 
-# === FastAPI Initialization ===
+# === FastAPI App Initialization ===
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # update for production
+    allow_origins=["*"],  # Change to your frontend URL in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -59,7 +62,7 @@ app.add_middleware(
 
 model = load_model()
 
-# === Classification Endpoint ===
+# === Predict Endpoint ===
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
     contents = await file.read()
@@ -73,35 +76,48 @@ async def predict(file: UploadFile = File(...)):
     return {"predicted_class": predicted_class}
 
 # === Chatbot Endpoint ===
-class PromptRequest(BaseModel):
-    prompt: str
-
 @app.post("/chat")
-async def chat(request: PromptRequest):
-    data = {
-        "inputs": request.prompt,
-        "parameters": {
-            "max_new_tokens": 256,
-            "temperature": 0.7
-        }
-    }
-
-    response = requests.post(HF_API_URL, headers=headers, json=data)
-
-    if response.status_code != 200:
-        return {"error": f"Request failed: {response.status_code}", "details": response.json()}
-
+async def chat(
+    prompt: str = Body(""),  # can be empty or used if needed
+    name: str = Body(...),
+    age: int = Body(...),
+    diagnosis: str = Body(...),
+    allergies: str = Body(...)
+):
     try:
-        text = response.json()[0]["generated_text"]
-    except Exception:
-        return {"error": "Unexpected response format", "response": response.json()}
+        patient_info = f"""
+Patient name: {name}
+Age: {age}
+Diagnosis: {diagnosis}
+Allergies: {allergies}
+"""
 
-    # Remove the prompt part
-    if request.prompt in text:
-        text = text.replace(request.prompt, "").strip()
+        payload = {
+            "model": "mistralai/mistral-7b-instruct:free",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a medical assistant. Based on the provided patient information, generate a 2-line treatment recommendation."
+                },
+                {
+                    "role": "user",
+                    "content": patient_info
+                }
+            ]
+        }
 
-    return {"response": text}
+        response = requests.post(OPENROUTER_URL, headers=openrouter_headers, json=payload)
+        data = response.json()
+
+        if response.status_code != 200 or "choices" not in data:
+            return {"error": "API Error", "details": data}
+
+        return {"response": data["choices"][0]["message"]["content"]}
+
+    except Exception as e:
+        return {"error": "Internal Server Error", "details": str(e)}
+
+# === Root Test Endpoint ===
 @app.get("/")
 async def root():
     return {"message": "API is running!"}
-
