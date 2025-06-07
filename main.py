@@ -2,12 +2,23 @@
 
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from PIL import Image
+import requests
 import io
 import torch
 from torchvision import models, transforms
+import os
 
-# Load model
+# === Chatbot Config ===
+HF_API_KEY = os.getenv("HF_API_KEY")
+HF_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1"
+
+headers = {
+    "Authorization": f"Bearer {HF_API_KEY}"
+}
+
+# === Load Classification Model ===
 def load_model(model_path="skin_injury_model.pth"):
     model = models.efficientnet_b0(pretrained=False)
     num_features = model.classifier[1].in_features
@@ -19,8 +30,8 @@ def load_model(model_path="skin_injury_model.pth"):
     model.eval()
     return model
 
-# Image transformation
-def preprocess_image(file) -> 'torch.Tensor':
+# === Image Preprocessing ===
+def preprocess_image(file) -> torch.Tensor:
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
@@ -30,25 +41,23 @@ def preprocess_image(file) -> 'torch.Tensor':
     image_tensor = transform(image).unsqueeze(0)
     return image_tensor, image
 
-# Define class labels
+# === Class Names ===
 class_names = ['ingrown nails', 'abrasion', 'bruises', 'burn', 'cut']
 
-# Initialize FastAPI
+# === FastAPI Initialization ===
 app = FastAPI()
 
-# Enable CORS for frontend integration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Change this to your frontend URL in production
+    allow_origins=["*"],  # update for production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Load model once
 model = load_model()
 
-# Predict endpoint
+# === Classification Endpoint ===
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
     contents = await file.read()
@@ -60,3 +69,33 @@ async def predict(file: UploadFile = File(...)):
         predicted_class = class_names[predicted.item()]
 
     return {"predicted_class": predicted_class}
+
+# === Chatbot Endpoint ===
+class PromptRequest(BaseModel):
+    prompt: str
+
+@app.post("/chat")
+async def chat(request: PromptRequest):
+    data = {
+        "inputs": request.prompt,
+        "parameters": {
+            "max_new_tokens": 256,
+            "temperature": 0.7
+        }
+    }
+
+    response = requests.post(HF_API_URL, headers=headers, json=data)
+
+    if response.status_code != 200:
+        return {"error": f"Request failed: {response.status_code}", "details": response.json()}
+
+    try:
+        text = response.json()[0]["generated_text"]
+    except Exception:
+        return {"error": "Unexpected response format", "response": response.json()}
+
+    # Remove the prompt part
+    if request.prompt in text:
+        text = text.replace(request.prompt, "").strip()
+
+    return {"response": text}
