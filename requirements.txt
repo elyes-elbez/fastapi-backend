@@ -3,4 +3,5 @@ uvicorn
 torch
 torchvision
 pillow
-python-multipart
+requests
+python-dotenv
