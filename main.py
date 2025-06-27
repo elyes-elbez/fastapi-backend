@@ -23,6 +23,31 @@ openrouter_headers = {
     "Content-Type": "application/json"
 }
 
+def load_severity_model(model_path):
+    model = models.efficientnet_b0(pretrained=False)
+    num_features = model.classifier[1].in_features
+    model.classifier = torch.nn.Sequential(
+        torch.nn.Dropout(0.3),
+        torch.nn.Linear(num_features, 2)  # assuming 3 severity classes
+    )
+    model.load_state_dict(torch.load(model_path, map_location=torch.device("cpu")))
+    model.eval()
+    return model
+
+# === Load all severity models ===
+severity_models = {
+    'burn': load_severity_model("injury_burn_model.pth"),
+    'abrasion': load_severity_model("injury_abrasion_model.pth"),
+    'bruises': load_severity_model("injury_Bruises_model.pth"),
+    'cut': load_severity_model("injury_cut_model.pth"),
+    'ingrown nails': load_severity_model("injury_ingrown_model.pth")
+}
+
+severity_classes = ['not severe', 'severe'] # or ['not severe', 'severe'] if binary
+
+
+
+
 # === Load Classification Model ===
 def load_model(model_path="skin_injury_model.pth"):
     model = models.efficientnet_b0(pretrained=False)
@@ -65,15 +90,36 @@ model = load_model()
 # === Predict Endpoint ===
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
-    contents = await file.read()
-    image_tensor, _ = preprocess_image(contents)
+    try:
+        contents = await file.read()
+        image_tensor, _ = preprocess_image(contents)
 
-    with torch.no_grad():
-        outputs = model(image_tensor)
-        _, predicted = torch.max(outputs, 1)
-        predicted_class = class_names[predicted.item()]
+        # Step 1: Predict injury class
+        with torch.no_grad():
+            outputs = model(image_tensor)
+            _, predicted = torch.max(outputs, 1)
+            predicted_class = class_names[predicted.item()]
 
-    return {"predicted_class": predicted_class}
+        # Step 2: Load corresponding severity model
+        severity_model = severity_models.get(predicted_class)
+        if not severity_model:
+            return {"error": f"No severity model found for class '{predicted_class}'."}
+
+        # Step 3: Predict severity
+        with torch.no_grad():
+            severity_output = severity_model(image_tensor)
+            _, severity_idx = torch.max(severity_output, 1)
+            severity_label = severity_classes[severity_idx.item()]
+
+        # Step 4: Return both
+        return {
+            "injury_type": predicted_class,
+            "severity": severity_label
+        }
+
+    except Exception as e:
+        return {"error": "Prediction failed", "details": str(e)}
+
 
 # === Chatbot Endpoint ===
 @app.post("/chat")
