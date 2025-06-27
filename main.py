@@ -38,7 +38,7 @@ def load_severity_model(model_path):
 severity_models = {
     'burn': load_severity_model("injury_burn_model.pth"),
     'abrasion': load_severity_model("injury_abrasion_model.pth"),
-    'bruises': load_severity_model("injury_Bruises_model.pth"),
+    'bruises': load_severity_model("injury_Bruise_model.pth"),
     'cut': load_severity_model("injury_cut_model.pth"),
     'ingrown nails': load_severity_model("injury_ingrown_model.pth")
 }
