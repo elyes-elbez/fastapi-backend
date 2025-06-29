@@ -8,13 +8,13 @@ from torchvision import models, transforms
 from dotenv import load_dotenv
 import os
 import requests
+import gc  # for manual garbage collection
+import psutil  # optional, for memory tracking
 
 # === Load Environment Variables ===
 load_dotenv()
 OPENROUTER_API_KEY = os.getenv("HF_API_KEY")
-
 print("HF_API_KEY =", OPENROUTER_API_KEY)
-
 
 # === OpenRouter Config ===
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
@@ -28,27 +28,12 @@ def load_severity_model(model_path):
     num_features = model.classifier[1].in_features
     model.classifier = torch.nn.Sequential(
         torch.nn.Dropout(0.3),
-        torch.nn.Linear(num_features, 2)  # assuming 3 severity classes
+        torch.nn.Linear(num_features, 2)
     )
     model.load_state_dict(torch.load(model_path, map_location=torch.device("cpu")))
     model.eval()
     return model
 
-# === Load all severity models ===
-severity_models = {
-    'burn': load_severity_model("injury_burn_model.pth"),
-    'abrasion': load_severity_model("injury_abrasion_model.pth"),
-    'bruises': load_severity_model("injury_Bruise_model.pth"),
-    'cut': load_severity_model("injury_cut_model.pth"),
-    'ingrown nails': load_severity_model("injury_ingrown_model.pth")
-}
-
-severity_classes = ['not severe', 'severe'] # or ['not severe', 'severe'] if binary
-
-
-
-
-# === Load Classification Model ===
 def load_model(model_path="skin_injury_model.pth"):
     model = models.efficientnet_b0(pretrained=False)
     num_features = model.classifier[1].in_features
@@ -60,7 +45,6 @@ def load_model(model_path="skin_injury_model.pth"):
     model.eval()
     return model
 
-# === Image Preprocessing ===
 def preprocess_image(file) -> torch.Tensor:
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
@@ -71,7 +55,7 @@ def preprocess_image(file) -> torch.Tensor:
     image_tensor = transform(image).unsqueeze(0)
     return image_tensor, image
 
-# === Class Names ===
+severity_classes = ['not severe', 'severe']
 class_names = ['ingrown nails', 'abrasion', 'bruises', 'burn', 'cut']
 
 # === FastAPI App Initialization ===
@@ -79,7 +63,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Change to your frontend URL in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -94,24 +78,26 @@ async def predict(file: UploadFile = File(...)):
         contents = await file.read()
         image_tensor, _ = preprocess_image(contents)
 
-        # Step 1: Predict injury class
         with torch.no_grad():
             outputs = model(image_tensor)
             _, predicted = torch.max(outputs, 1)
             predicted_class = class_names[predicted.item()]
 
-        # Step 2: Load corresponding severity model
-        severity_model = severity_models.get(predicted_class)
-        if not severity_model:
-            return {"error": f"No severity model found for class '{predicted_class}'."}
+        model_filename = f"injury_{predicted_class.replace(' ', '_')}_model.pth"
+        if not os.path.exists(model_filename):
+            return {"error": f"Model file '{model_filename}' not found for class '{predicted_class}'."}
 
-        # Step 3: Predict severity
+        severity_model = load_severity_model(model_filename)
+
         with torch.no_grad():
             severity_output = severity_model(image_tensor)
             _, severity_idx = torch.max(severity_output, 1)
             severity_label = severity_classes[severity_idx.item()]
 
-        # Step 4: Return both
+        # Free memory
+        del severity_model, severity_output, severity_idx
+        gc.collect()
+
         return {
             "injury_type": predicted_class,
             "severity": severity_label
@@ -120,11 +106,10 @@ async def predict(file: UploadFile = File(...)):
     except Exception as e:
         return {"error": "Prediction failed", "details": str(e)}
 
-
 # === Chatbot Endpoint ===
 @app.post("/chat")
 async def chat(
-    prompt: str = Body(""),  # can be empty or used if needed
+    prompt: str = Body(""),
     name: str = Body(...),
     age: int = Body(...),
     diagnosis: str = Body(...),
