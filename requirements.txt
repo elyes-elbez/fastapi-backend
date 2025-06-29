@@ -6,3 +6,4 @@ pillow
 requests
 python-dotenv
 python-multipart
+psutil
